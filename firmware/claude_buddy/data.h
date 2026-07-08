@@ -91,6 +91,16 @@ static void _applyJson(const char* line, TamaState* out) {
   if (deserializeJson(doc, line)) return;
   if (xferCommand(doc)) { _lastLiveMs = millis(); return; }
 
+  // Claude Desktop fires a one-shot {"evt":"turn",...} after each completed
+  // turn. Without this guard it falls through to the heartbeat branch below,
+  // whose prompt-absent path clears a pending approval prompt. Treat the
+  // event as a completion signal and keep-alive, nothing more.
+  if (!doc["evt"].isNull()) {
+    out->recentlyCompleted = true;
+    _lastLiveMs = millis();
+    return;
+  }
+
   // claude-usage v:1 plan-usage snapshot (from the unified BLE bridge).
   if ((int)(doc["v"] | 0) == 1) {
     JsonObject su = doc["session"], wu = doc["week"], tu = doc["today"];
