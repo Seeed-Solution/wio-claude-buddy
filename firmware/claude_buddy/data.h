@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <time.h>           // struct tm + gmtime_r (not pulled in by the SAMD core)
 #include <ArduinoJson.h>
-#include "ble_bridge.h"
+#include "transport.h"
 #include "xfer.h"
 #include "wio_platform.h"   // soft RTC (RTC_TimeTypeDef/RTC_DateTypeDef + rtcSet*)
 
@@ -191,9 +191,9 @@ inline void dataPoll(TamaState* out) {
   }
 
   _usbLine.feed(Serial, out);
-  // BLE ring buffer is drained manually since it's not a Stream.
-  while (bleAvailable()) {
-    int c = bleRead();
+  // Transport ring buffer is drained manually since it's not a Stream.
+  while (trAvailable()) {
+    int c = trRead();
     if (c < 0) break;
     _lastBtByteMs = millis();
     if (c == '\n' || c == '\r') {

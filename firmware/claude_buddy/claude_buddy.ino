@@ -11,7 +11,7 @@
  *     --build-property "compiler.cpp.extra_flags=-DMOCK_DATA" --export-binaries claude_buddy.ino
  */
 #include "wio_platform.h"
-#include "ble_bridge.h"
+#include "transport.h"
 #include "data.h"
 #include "buddy.h"
 #include "character.h"
@@ -50,8 +50,8 @@ static void triggerOneShot(PersonaState s, uint32_t ms) { activeState = s; oneSh
 
 static void sendCmd(const char* json) {
   Serial.println(json);
-  bleWrite((const uint8_t*)json, strlen(json));
-  bleWrite((const uint8_t*)"\n", 1);
+  trWrite((const uint8_t*)json, strlen(json));
+  trWrite((const uint8_t*)"\n", 1);
 }
 
 // ── header ──
@@ -224,8 +224,8 @@ void setup() {
   spr.pushSprite(0, 0);
   statsLoad(); settingsLoad(); petNameLoad(); buddyInit();
   memset(&tama, 0, sizeof(tama));
+  trInit("Claude Wio");                      // no-op stub under MOCK_DATA
 #ifndef MOCK_DATA
-  bleInit("Claude Wio");
   gifAvailable = characterInit(nullptr);     // host can push a GIF pack (opt-in BUDDY_GIF build)
   buddyMode = !gifAvailable;
 #else
@@ -240,9 +240,7 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
-#ifndef MOCK_DATA
-  bleLoop();
-#endif
+  trLoop();                                  // no-op stub under MOCK_DATA
 #ifdef MOCK_DATA
   // Demo mode animates session states but never raises a permission prompt.
   // Inject a synthetic one on a timer so the emulator exercises the approval
@@ -338,16 +336,3 @@ void loop() {
 
   delay(16);
 }
-
-// ── MOCK BLE stubs (real impl is ble_bridge.cpp, hardware-only) ──
-#ifdef MOCK_DATA
-void bleInit(const char*) {}
-void bleLoop() {}
-bool bleConnected() { return false; }
-bool bleSecure() { return false; }
-uint32_t blePasskey() { return 0; }
-void bleClearBonds() {}
-size_t bleAvailable() { return 0; }
-int bleRead() { return -1; }
-size_t bleWrite(const uint8_t*, size_t) { return 0; }
-#endif

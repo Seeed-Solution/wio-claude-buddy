@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "b64.h"
-#include "ble_bridge.h"
+#include "transport.h"
 #include "wio_platform.h"
 #include "stats.h"
 
@@ -34,7 +34,7 @@ static void _xAck(const char* what, bool ok, uint32_t n = 0) {
   char b[64];
   int len = snprintf(b, sizeof(b), "{\"ack\":\"%s\",\"ok\":%s,\"n\":%lu}\n", what, ok?"true":"false", (unsigned long)n);
   Serial.write(b, len);
-  bleWrite((const uint8_t*)b, len);
+  trWrite((const uint8_t*)b, len);
 }
 
 static uint32_t _xWipeDir(const char* dir) {
@@ -103,7 +103,7 @@ inline bool xferCommand(JsonDocument& doc) {
   }
 
   if (strcmp(cmd, "unpair") == 0) {
-    bleClearBonds();
+    trClearBonds();
     _xAck("unpair", true);
     return true;
   }
@@ -126,7 +126,7 @@ inline bool xferCommand(JsonDocument& doc) {
       "\"sys\":{\"up\":%lu,\"heap\":%lu,\"fsFree\":%lu,\"fsTotal\":%lu},"
       "\"stats\":{\"appr\":%u,\"deny\":%u,\"vel\":%u,\"nap\":%lu,\"lvl\":%u}"
       "}}\n",
-      petName(), ownerName(), bleSecure() ? "true" : "false",
+      petName(), ownerName(), trSecure() ? "true" : "false",
       (unsigned long)(millis() / 1000), (unsigned long)freeHeapApprox(),
       (unsigned long)(BUDDYFS.totalBytes() - BUDDYFS.usedBytes()),
       (unsigned long)BUDDYFS.totalBytes(),
@@ -167,7 +167,7 @@ inline bool xferCommand(JsonDocument& doc) {
         (unsigned long)available, (unsigned long)(_xTotal/1024), (unsigned long)(available/1024)
       );
       Serial.write(b, len);
-      bleWrite((const uint8_t*)b, len);
+      trWrite((const uint8_t*)b, len);
       return true;
     }
 
