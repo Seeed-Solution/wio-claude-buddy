@@ -93,7 +93,9 @@ static void onMessage(char* topic, byte* payload, unsigned int length) {
   seen[idx] = true;
   const char* t = strstr(body, "\"timestamp\":");
   if (t) {
-    uint64_t ts = strtoull(t + 12, nullptr, 10);
+    t += 12;
+    if (*t == '"') t++;                    // broker sends it as a quoted string
+    uint64_t ts = strtoull(t, nullptr, 10);
     if (ts > 1000000000000ULL) lastTsMs = ts;
   }
 
