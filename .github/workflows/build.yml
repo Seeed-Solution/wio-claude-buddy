@@ -26,12 +26,28 @@ jobs:
             "AnimatedGIF" \
             "Grove-3-Axis-Digital-Accelerometer-2g-to-16g-LIS3DHTR" \
             "Seeed Arduino rpcBLE" \
-            "Seeed Arduino rpcUnified"
+            "Seeed Arduino rpcUnified" \
+            "Seeed Arduino rpcWiFi" \
+            "PubSubClient"
 
-      - name: Compile firmware (default build)
+      - name: Compile firmware (default NET build — WiFi + SenseCraft MQTT)
         run: |
           arduino-cli compile \
             --fqbn Seeeduino:samd:seeed_wio_terminal \
+            firmware/claude_buddy/claude_buddy.ino
+
+      - name: Compile firmware (BLE build)
+        run: |
+          arduino-cli compile \
+            --fqbn Seeeduino:samd:seeed_wio_terminal \
+            --build-property "compiler.cpp.extra_flags=-DBUDDY_BLE" \
+            firmware/claude_buddy/claude_buddy.ino
+
+      - name: Compile firmware (MOCK_DATA build — emulator)
+        run: |
+          arduino-cli compile \
+            --fqbn Seeeduino:samd:seeed_wio_terminal \
+            --build-property "compiler.cpp.extra_flags=-DMOCK_DATA" \
             firmware/claude_buddy/claude_buddy.ino
 
       - name: Native unit test (base64 decoder)
@@ -47,6 +63,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Byte-compile bridge + claude_meter
+      - name: Byte-compile bridges + claude_meter
         run: |
-          python -m py_compile host/buddy_ble_bridge.py host/claude_meter/*.py
+          python -m py_compile host/buddy_ble_bridge.py host/buddy_common.py \
+            host/buddy_sensecraft_bridge.py host/claude_meter/*.py
