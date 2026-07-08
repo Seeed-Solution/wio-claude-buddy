@@ -7,7 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A two-part desk companion for Claude Code running on a **Seeed Wio Terminal**
 (SAMD51, 320×240 LCD): an Arduino **firmware** that renders an animated ASCII pet
 plus session/usage panels, and a Python **host bridge** that feeds it data from
-`~/.claude` and Claude's usage API over BLE. It's a Wio port of
+`~/.claude` and Claude's usage API. The default transport is **WiFi + SenseCraft
+Data Platform** (host POSTs measurements; Wio subscribes to OpenStream MQTT);
+the original **BLE** link remains behind `-DBUDDY_BLE`. It's a Wio port of
 [`claude-desktop-buddy`](https://github.com/Links17/claude-desktop-buddy).
 
 `README.md` is the source of truth for hardware setup, wiring, and the full
@@ -18,9 +20,14 @@ troubleshooting log — read it for anything physical-device related.
 ### Firmware (`firmware/claude_buddy/`)
 
 ```bash
-# Default build (ASCII buddy + BLE + usage). On macOS pin the bundled Wio LCD lib:
+# Default build (ASCII buddy + WiFi/SenseCraft MQTT + usage). On macOS pin the
+# bundled Wio LCD lib. Needs libs: "Seeed Arduino rpcWiFi" "PubSubClient".
+# Credentials come from secrets.h (gitignored; template secrets_example.h).
 LCD=~/Library/Arduino15/packages/Seeeduino/hardware/samd/1.8.5/libraries/Seeed_Arduino_LCD
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal --library "$LCD" claude_buddy.ino
+
+# BLE build (Claude Desktop Hardware Buddy / buddy_ble_bridge.py):
+arduino-cli compile ... --build-property "compiler.cpp.extra_flags=-DBUDDY_BLE" claude_buddy.ino
 
 # Build + flash to a board (device must be in bootloader: double-tap power switch):
 arduino-cli compile --fqbn Seeeduino:samd:seeed_wio_terminal --library "$LCD" \
@@ -44,28 +51,70 @@ the board package.
 
 ```bash
 cd host
+# SenseCraft bridge (default path, stdlib-only, no venv needed):
+#   config: env vars or sensecraft_config.json (see sensecraft_config.example.json)
+python3 buddy_sensecraft_bridge.py               # POSTs measurements every 10 s
+python3 buddy_sensecraft_bridge.py --dry-run     # print one uplink body, don't send
+
+# BLE bridge (for -DBUDDY_BLE firmware):
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt        # only dep is bleak; claude_meter is stdlib-only
 python buddy_ble_bridge.py             # finds "Claude Wio" over BLE and streams
 
 # Lint (what CI runs):
-python -m py_compile host/buddy_ble_bridge.py host/claude_meter/*.py
+python -m py_compile host/buddy_ble_bridge.py host/buddy_common.py \
+  host/buddy_sensecraft_bridge.py host/claude_meter/*.py
 ```
 
-CI (`.github/workflows/build.yml`) on every push/PR: compiles the default
-firmware, runs the native base64 test, and byte-compiles the host. There is no
-pytest/ruff config — keep the host import-clean and byte-compilable.
+Devkit provisioning (once, `sensecraft-cli` = `@seeed-studio/sensecraft-cli` npm):
+`sensecraft-cli device devkit create --sku blank_device --name claude-buddy`,
+key via `... devkit key --eui <EUI>`, verify data with `... data latest --eui <EUI>`.
+
+CI (`.github/workflows/build.yml`) on every push/PR: compiles the NET (default),
+`-DBUDDY_BLE`, and `-DMOCK_DATA` firmware variants, runs the native base64 test,
+and byte-compiles the host. There is no pytest/ruff config — keep the host
+import-clean and byte-compilable.
 
 ## Architecture
 
-### Single BLE link, one data source
+### One radio transport per build
 
-The Wio holds exactly **one** BLE connection. You pick *either* this project's
-`buddy_ble_bridge.py` (pet + sessions + real usage gauges, no live permission
-prompts) *or* Claude Desktop's built-in Hardware Buddy (pet + live approve/deny
-prompts, no usage gauges). The firmware speaks both protocols; the bridge is the
-primary path. The bridge derives everything from `~/.claude`, which has no
-pending-prompt info — that's why the approval footer only lights up under Desktop.
+The RTL8720 coprocessor runs **one** of rpcWiFi/rpcBLE per build, dispatched
+through `transport.h` (`tr*` functions): default = `net_bridge` (WiFi +
+SenseCraft OpenStream MQTT), `-DBUDDY_BLE` = `ble_bridge` (NUS peripheral),
+`-DMOCK_DATA` = inline no-op stubs. Under BLE you pick *either*
+`buddy_ble_bridge.py` (pet + sessions + real usage gauges) *or* Claude Desktop's
+built-in Hardware Buddy (pet + live approve/deny prompts, no usage gauges). The
+bridges derive everything from `~/.claude`, which has no pending-prompt info,
+and the SenseCraft downlink is telemetry-only — the approval footer only lights
+up under Desktop (BLE build).
+
+### SenseCraft path (default)
+
+`buddy_sensecraft_bridge.py` flattens the heartbeat + v:1 snapshot into numeric
+measurements and POSTs `<api_base>/deviceapi/kit/message_uplink` (auth header
+`Device base64(EUI:device_key)`, one-time `update-channel-info` declaration —
+measurements on an undeclared channel are dropped) every 10 s. The platform
+pushes each measurement to subscribers of
+`/device_sensor_data/<org>/<eui>/<ch>/<rsvd>/<measID>` on the OpenStream broker
+(payload `{"value":N,"timestamp":<ms>}`; MQTT :1883, user `org-<org>`, password
+= org API access key). `net_bridge.cpp` accumulates them (500 ms quiet / 2.5 s
+max debounce per group) and **synthesizes the original JSON lines** into the
+same RX ring buffer BLE used — `data.h` is transport-agnostic and unchanged.
+Soft RTC syncs from measurement timestamps + the biased tz measurement (no NTP).
+
+Measurement map (channel 1; **custom IDs are silently dropped** by the platform,
+so standard IDs are reused — keep `buddy_sensecraft_bridge.py::measurements` and
+`net_bridge.cpp::measIndex` in agreement): 4097 total, 4098 running, 4099
+waiting, 4100 tokens, 4101 tokens_today, 4102 session.pct, 4103 session.reset_s,
+4104 week.pct, 4105 week.reset_s, 4106 today.tokens, 4108 tz_offset_sec+86400.
+Not transmitted (numeric-only wire): heartbeat `msg` (synthesized on-device),
+`entries[]` (SESSIONS pane shows counts only), `week.reset_label` (countdown
+fallback). NET builds have no device→host uplink: `trWrite` is a no-op, so
+permission acks / GIF folder-push can't be driven (BLE-build features).
+
+Unlike rpcBLE, the NET state machine **reconnects automatically** after WiFi or
+broker drops — the "replug after disconnect" rule below is BLE-only.
 
 ### Wire protocol (newline-delimited JSON, NUS)
 
@@ -116,9 +165,13 @@ Linux/Windows means replacing `_oauth()`.
 - `wio_platform.*` — hardware shim: display/sprite, buttons, accelerometer
   (shake/face-down), buzzer, and a **soft RTC** (M5-compatible structs so `data.h`
   ports unchanged).
-- `ble_bridge.*` — rpcBLE NUS peripheral. `buddy*.{h,cpp}` + `buddy_sp_*.cpp` —
-  the ASCII pet engine; each of the 18 species is one file exposing 7 state
-  functions in `PersonaState` order (`Species::states[7]`).
+- `transport.h` — the `tr*` dispatch header (declaration-only, safe next to
+  TFT_eSPI). `net_bridge.*` — rpcWiFi + PubSubClient transport (default).
+  `ble_bridge.*` — rpcBLE NUS peripheral (`-DBUDDY_BLE`).
+  `secrets_example.h` → copy to gitignored `secrets.h` for real credentials.
+  `buddy*.{h,cpp}` + `buddy_sp_*.cpp` — the ASCII pet engine; each of the 18
+  species is one file exposing 7 state functions in `PersonaState` order
+  (`Species::states[7]`).
 - `character.*` + `xfer.h`/`b64.h` — GIF character packs, opt-in `-DBUDDY_GIF`.
 - `stats.h` (mood/fed/energy/level) + `prefs_compat.h` (settings store).
 
@@ -130,8 +183,9 @@ Linux/Windows means replacing `_oauth()`.
 - **8-bit sprite, not 16-bit.** A full-screen 16-bit sprite (≈150 KB) won't fit
   beside the BLE stack's RAM; the firmware uses an 8-bit sprite (≈77 KB). A red
   "sprite alloc failed" screen means you're out of RAM.
-- **No re-advertise after disconnect.** Re-advertising crashed rpcBLE, so after a
-  BLE drop you must **replug the Wio** before the bridge can reconnect.
+- **No re-advertise after disconnect (BLE builds).** Re-advertising crashed
+  rpcBLE, so after a BLE drop you must **replug the Wio** before the bridge can
+  reconnect. (NET builds reconnect automatically.)
 - **GIF/filesystem is opt-in** because `Seeed_FS`/`SD`'s global initializer faults
   on cold boot. The default build omits it (`wio_platform.h` gates `BUDDY_FS`).
 - **`MOCK_DATA` builds** stub out all `ble*` functions in `claude_buddy.ino` and
@@ -148,10 +202,12 @@ Linux/Windows means replacing `_oauth()`.
   flash the user must **replug USB** to run the app (it doesn't auto-start). The
   port differs between bootloader and app modes — always auto-detect
   (`ls /dev/cu.usbmodem*`).
-- **TFT_eSPI and rpcBLE cannot be in the same translation unit.** Arduino's
-  `min()`/`max()` macros collide with rpcBLE's STL headers (`error: macro "min"
-  passed 3 arguments`). Keep all BLE code in its own `.cpp` (`ble_bridge.cpp`)
-  and never `#include` a BLE header from the same file as `TFT_eSPI.h`.
+- **TFT_eSPI and rpcBLE/rpcWiFi cannot be in the same translation unit.**
+  Arduino's `min()`/`max()` macros collide with the rpc STL headers (`error:
+  macro "min" passed 3 arguments`). Keep radio code in its own `.cpp`
+  (`ble_bridge.cpp`, `net_bridge.cpp`) and never `#include` an rpc header from
+  the same file as `TFT_eSPI.h`. (`net_bridge.cpp` also avoids ArduinoJson —
+  the downlink payload is parsed with `strstr`/`strtod`.)
 - **`#include <time.h>` explicitly** where you use `gmtime_r`/`struct tm`
   (`data.h`) — the Seeed SAMD core doesn't pull it in via `Arduino.h`.
 - **`firmware/ble_probe/`** is a minimal BLE write-path diagnostic (NUS + an
