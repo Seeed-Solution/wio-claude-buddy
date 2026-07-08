@@ -6,7 +6,8 @@
 // these tr* functions; which radio backs them is a compile-time choice (the
 // RTL8720 coprocessor runs ONE of rpcBLE/rpcWiFi per build, never both).
 //
-//   default      → ble_bridge (NUS peripheral: Claude Desktop / BLE bridge)
+//   default      → net_bridge (WiFi + SenseCraft OpenStream MQTT)
+//   -DBUDDY_BLE  → ble_bridge (NUS peripheral: Claude Desktop / BLE bridge)
 //   -DMOCK_DATA  → inline no-op stubs (emulator/demo build, no radio)
 //
 // The backend headers included here are declaration-only, so transport.h is
@@ -25,7 +26,7 @@ inline size_t   trAvailable() { return 0; }
 inline int      trRead() { return -1; }
 inline size_t   trWrite(const uint8_t*, size_t) { return 0; }
 
-#else  // BLE
+#elif defined(BUDDY_BLE)
 
 #include "ble_bridge.h"
 inline void     trInit(const char* name) { bleInit(name); }
@@ -37,5 +38,18 @@ inline void     trClearBonds() { bleClearBonds(); }
 inline size_t   trAvailable() { return bleAvailable(); }
 inline int      trRead() { return bleRead(); }
 inline size_t   trWrite(const uint8_t* d, size_t n) { return bleWrite(d, n); }
+
+#else  // default: WiFi + SenseCraft MQTT
+
+#include "net_bridge.h"
+inline void     trInit(const char* name) { netInit(name); }
+inline void     trLoop() { netLoop(); }
+inline bool     trConnected() { return netConnected(); }
+inline bool     trSecure() { return netSecure(); }
+inline uint32_t trPasskey() { return netPasskey(); }
+inline void     trClearBonds() { netClearBonds(); }
+inline size_t   trAvailable() { return netAvailable(); }
+inline int      trRead() { return netRead(); }
+inline size_t   trWrite(const uint8_t* d, size_t n) { return netWrite(d, n); }
 
 #endif

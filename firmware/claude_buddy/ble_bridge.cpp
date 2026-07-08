@@ -1,4 +1,4 @@
-#ifndef MOCK_DATA
+#if !defined(MOCK_DATA) && defined(BUDDY_BLE)
 // Nordic UART Service bridge on the Wio Terminal's RTL8720DN, via Seeed's
 // rpcBLE (BLE runs on the wireless co-processor, driven over RPC). The API
 // mirrors the ESP32 BLE API the upstream used.
@@ -108,4 +108,4 @@ size_t bleWrite(const uint8_t* data, size_t len) {
   }
   return sent;
 }
-#endif // MOCK_DATA
+#endif // !MOCK_DATA && BUDDY_BLE
