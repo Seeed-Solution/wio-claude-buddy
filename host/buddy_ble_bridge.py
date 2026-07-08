@@ -211,8 +211,11 @@ async def session(dev) -> None:
 async def run() -> None:
     while True:
         print("scanning for 'Claude Wio' (power it on; do not pair it in Claude Desktop)...")
+        # On macOS, CoreBluetooth leaves BLEDevice.name None for a never-paired
+        # device; the advertised name only arrives in ad.local_name. Check both.
         dev = await BleakScanner.find_device_by_filter(
-            lambda d, ad: (d.name or "").startswith(DEVICE_PREFIX), timeout=20)
+            lambda d, ad: (d.name or ad.local_name or "").startswith(DEVICE_PREFIX),
+            timeout=20)
         if not dev:
             print("not found; retrying in 5s")
             await asyncio.sleep(5)
