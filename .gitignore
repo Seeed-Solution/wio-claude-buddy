@@ -10,3 +10,5 @@ host/.venv/
 # personal / local
 caps.json
 .DS_Store
+host/sensecraft_config.json
+firmware/claude_buddy/secrets.h
