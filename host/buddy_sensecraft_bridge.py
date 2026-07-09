@@ -13,7 +13,10 @@ Provisioning (once, with sensecraft-cli authenticated):
 
 Config: env vars SENSECRAFT_API_BASE / SENSECRAFT_DEVICE_EUI /
 SENSECRAFT_DEVICE_KEY / BUDDY_INTERVAL_S, falling back to
-host/sensecraft_config.json (see sensecraft_config.example.json).
+host/sensecraft_config.json (see sensecraft_config.example.json). A
+"devices" list in the config file uplinks the same measurements to several
+devices (e.g. Wio Terminal + SenseCAP Indicator) from this one process;
+the legacy single "eui"/"key" form still works.
 
 Run:
     python3 buddy_sensecraft_bridge.py [--dry-run]
@@ -123,7 +126,7 @@ def measurements(hb: dict, snap: dict, tz_off: int) -> "dict[str, str]":
     }
 
 
-def uplink_body(cfg: dict, meas: "dict[str, str]", declare_channel: bool) -> dict:
+def uplink_body(dev: dict, meas: "dict[str, str]", declare_channel: bool) -> dict:
     ms = str(int(time.time() * 1000))
     events = [{
         "name": "measure-sensor",
@@ -139,16 +142,16 @@ def uplink_body(cfg: dict, meas: "dict[str, str]", declare_channel: bool) -> dic
         "requestId": str(uuid.uuid4()),
         "timestamp": ms,
         "intent": "event",
-        "deviceEui": cfg["eui"],
-        "deviceKey": cfg["key"],
+        "deviceEui": dev["eui"],
+        "deviceKey": dev["key"],
         "events": events,
     }
 
 
-def post_uplink(cfg: dict, body: dict) -> None:
-    auth = base64.b64encode(f"{cfg['eui']}:{cfg['key']}".encode()).decode()
+def post_uplink(api_base: str, dev: dict, body: dict) -> None:
+    auth = base64.b64encode(f"{dev['eui']}:{dev['key']}".encode()).decode()
     req = urllib.request.Request(
-        cfg["api_base"] + "/deviceapi/kit/message_uplink",
+        api_base + "/deviceapi/kit/message_uplink",
         data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
         headers={"Authorization": f"Device {auth}",
                  "Content-Type": "application/json"},
@@ -171,9 +174,12 @@ def run(dry_run: bool) -> None:
     events: list = []
     probed = None
     last_probe = 0.0
-    declared = False                 # send update-channel-info on first uplink
-    backoff = 0                      # doubling 5..60 s after failures
-    print(f"uplinking to {cfg['api_base']} as {cfg['eui']} every {cfg['interval_s']}s")
+    for dev in cfg["devices"]:       # per-device runtime state
+        dev.update(declared=False,   # send update-channel-info on first uplink
+                   backoff=0,        # doubling 5..60 s after failures
+                   next_try=0.0)
+    euis = ", ".join(d["eui"] for d in cfg["devices"])
+    print(f"uplinking to {cfg['api_base']} as [{euis}] every {cfg['interval_s']}s")
     while True:
         now = time.time()
         events.extend(scanner.scan())
@@ -196,21 +202,33 @@ def run(dry_run: bool) -> None:
                 snap["week"]["reset_label"] = w.get("label", ""); snap["week"]["src"] = "exact"
 
         hb = heartbeat(events, now)
-        body = uplink_body(cfg, measurements(hb, snap, tz_off), not declared)
+        meas = measurements(hb, snap, tz_off)
+        sent = []
+        for dev in cfg["devices"]:
+            if now < dev["next_try"]:          # this device is backing off
+                continue
+            body = uplink_body(dev, meas, not dev["declared"])
+            if dry_run:
+                print(json.dumps(body, indent=2))
+                continue
+            try:
+                post_uplink(cfg["api_base"], dev, body)
+                dev["declared"] = True
+                dev["backoff"] = 0
+                sent.append(dev["eui"])
+            except Exception as e:
+                dev["backoff"] = min(60, dev["backoff"] * 2) if dev["backoff"] else 5
+                dev["next_try"] = now + dev["backoff"]
+                print(f"uplink to {dev['eui']} failed ({e}); "
+                      f"retrying in {dev['backoff']}s")
         if dry_run:
-            print(json.dumps(body, indent=2))
             return
-        try:
-            post_uplink(cfg, body)
-            declared = True
-            backoff = 0
+        if sent:
             src = snap["session"].get("src", "est")
-            print(f"sent ({src}): session {snap['session']['pct']}%  "
+            print(f"sent to [{', '.join(sent)}] ({src}): "
+                  f"session {snap['session']['pct']}%  "
                   f"week {snap['week']['pct']}%  running {hb['running']}")
-        except Exception as e:
-            backoff = min(60, backoff * 2) if backoff else 5
-            print(f"uplink failed ({e}); retrying in {backoff}s")
-        time.sleep(backoff if backoff else cfg["interval_s"])
+        time.sleep(cfg["interval_s"])
 
 
 if __name__ == "__main__":
