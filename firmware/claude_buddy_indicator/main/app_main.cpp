@@ -51,7 +51,7 @@ static bool selfTest(TamaState* st) {
            st->msg, st->tokensToday);
   ESP_LOGI(TAG, "usage: have=%d session=%d%%/%lds week=%d%%/%lds today=%ld",
            u.have, u.sessPct, u.sessResetS, u.weekPct, u.weekResetS, u.todayTokens);
-  ESP_LOGI(TAG, "rtc: %02u:%02u:%02u valid=%d (expect 08:20 local, UTC+8)",
+  ESP_LOGI(TAG, "rtc: %02u:%02u:%02u valid=%d (expect 18:20 — 10:20 UTC + 8h tz)",
            t.Hours, t.Minutes, t.Seconds, dataRtcValid());
 
   return st->sessionsTotal == 3 && st->sessionsRunning == 2 &&

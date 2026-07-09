@@ -132,12 +132,29 @@ static void startMqtt(void) {
   ESP_LOGI(TAG, "mqtt connecting to %s:%d as %s", MQTT_HOST, MQTT_PORT, clientId);
 }
 
+// One-shot scan dump on boot: bring-up diagnostic (is the configured SSID
+// even visible on 2.4 GHz? the S3 has no 5 GHz) and the data source the
+// Phase-2 provisioning UI will render as its network list.
+static void scanDump(void) {
+  static wifi_ap_record_t aps[20];
+  uint16_t n = sizeof(aps) / sizeof(aps[0]);
+  if (esp_wifi_scan_start(NULL, true) != ESP_OK) return;   // blocking, ~2 s
+  if (esp_wifi_scan_get_ap_records(&n, aps) != ESP_OK) return;
+  ESP_LOGI(TAG, "[scan] %u networks visible (2.4 GHz only):", n);
+  for (int i = 0; i < n; i++) {
+    ESP_LOGI(TAG, "[scan]   %-24s rssi=%d ch=%u auth=%d", (const char*)aps[i].ssid,
+             aps[i].rssi, aps[i].primary, (int)aps[i].authmode);
+  }
+}
+
 static void onWifiEvent(void* arg, esp_event_base_t base,
                         int32_t id, void* data) {
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+    scanDump();
     esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    ESP_LOGW(TAG, "wifi lost; rejoining '%s'", WIFI_SSID);
+    wifi_event_sta_disconnected_t* e = (wifi_event_sta_disconnected_t*)data;
+    ESP_LOGW(TAG, "wifi lost (reason=%d); rejoining '%s'", e->reason, WIFI_SSID);
     esp_wifi_connect();                      // endless retry, esp-mqtt waits
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
     ip_event_got_ip_t* e = (ip_event_got_ip_t*)data;
