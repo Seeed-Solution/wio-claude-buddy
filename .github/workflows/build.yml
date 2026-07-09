@@ -55,6 +55,30 @@ jobs:
           g++ -std=c++17 firmware/claude_buddy/test/test_b64.cpp -o /tmp/test_b64
           /tmp/test_b64
 
+      - name: Native unit test (net_bridge_core wire format)
+        run: |
+          g++ -std=c++17 firmware/claude_buddy/test/test_net_bridge_core.cpp -o /tmp/test_nbc
+          /tmp/test_nbc
+
+  indicator:
+    name: Compile firmware (SenseCAP Indicator, ESP-IDF)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Shared-file diff-guard (Wio <-> Indicator copies)
+        run: sh scripts/check_shared_files.sh
+
+      # v5.1 — the version Seeed's SenseCAP_Indicator_ESP32 BSP requires.
+      - name: Build (ESP-IDF v5.1, esp32s3)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.1.6
+          target: esp32s3
+          path: firmware/claude_buddy_indicator
+
   host:
     name: Lint host bridge
     runs-on: ubuntu-latest
@@ -66,4 +90,7 @@ jobs:
       - name: Byte-compile bridges + claude_meter
         run: |
           python -m py_compile host/buddy_ble_bridge.py host/buddy_common.py \
-            host/buddy_sensecraft_bridge.py host/claude_meter/*.py
+            host/buddy_sensecraft_bridge.py host/test_sensecraft_config.py \
+            host/claude_meter/*.py
+      - name: Host config unit tests
+        run: cd host && python -m unittest test_sensecraft_config -v
