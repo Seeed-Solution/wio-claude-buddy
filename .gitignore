@@ -17,3 +17,4 @@ firmware/claude_buddy/secrets.h
 firmware/claude_buddy_indicator/build/
 firmware/claude_buddy_indicator/sdkconfig
 firmware/claude_buddy_indicator/sdkconfig.old
+firmware/claude_buddy_indicator/main/indicator_secrets.h

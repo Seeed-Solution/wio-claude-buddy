@@ -1,9 +1,11 @@
 # shim/ is listed as this component's include dir so the verbatim-shared
 # headers resolve <Arduino.h> / "wio_platform.h" / "transport.h" here
 # (include-path precedence keeps their text identical to the Wio originals).
-idf_component_register(SRCS "app_main.cpp"
-                       INCLUDE_DIRS "shim"
-                       REQUIRES buddy_core net_bridge_core arduinojson esp_timer)
+idf_component_register(SRCS "app_main.cpp" "net_bridge_shell.c"
+                       INCLUDE_DIRS "shim" "."
+                       REQUIRES buddy_core net_bridge_core arduinojson
+                                esp_timer esp_wifi esp_event esp_netif
+                                nvs_flash mqtt)
 
 # The shared Wio headers use a terse style (two statements per line) that
 # trips -Werror=misleading-indentation under IDF's -Wall; they are verbatim
