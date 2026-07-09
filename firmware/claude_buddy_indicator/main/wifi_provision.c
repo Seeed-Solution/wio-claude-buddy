@@ -206,7 +206,24 @@ static void onDisconnectBtn(lv_event_t* e) {
   ESP_LOGI(TAG, "manual disconnect (credentials kept)");
 }
 
-static void onScanBtn(lv_event_t* e) { (void)e; scanStart(); }
+// Scanning forces off-channel time and disrupts in-flight STA traffic, so
+// rescanning while online needs an explicit confirmation (design doc §WiFi
+// provisioning, the rescan guard).
+static void onScanConfirm(lv_event_t* e) {
+  lv_obj_t* mbox = lv_event_get_current_target(e);
+  if (lv_msgbox_get_active_btn(mbox) == 0) scanStart();   // "Scan"
+  lv_msgbox_close(mbox);
+}
+
+static void onScanBtn(lv_event_t* e) {
+  (void)e;
+  if (sState != WP_ONLINE) { scanStart(); return; }
+  static const char* btns[] = { "Scan", "Cancel", "" };
+  lv_obj_t* mbox = lv_msgbox_create(NULL, "Rescan?",
+      "Scanning may briefly interrupt the connection.", btns, false);
+  lv_obj_center(mbox);
+  lv_obj_add_event_cb(mbox, onScanConfirm, LV_EVENT_VALUE_CHANGED, NULL);
+}
 
 static void kbClose(void) {
   if (sKbModal) { lv_obj_del(sKbModal); sKbModal = NULL; }
