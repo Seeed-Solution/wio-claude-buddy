@@ -132,65 +132,21 @@ static void startMqtt(void) {
   ESP_LOGI(TAG, "mqtt connecting to %s:%d as %s", MQTT_HOST, MQTT_PORT, clientId);
 }
 
-// One-shot scan dump on boot: bring-up diagnostic (is the configured SSID
-// even visible on 2.4 GHz? the S3 has no 5 GHz) and the data source the
-// Phase-2 provisioning UI will render as its network list.
-static void scanDump(void) {
-  static wifi_ap_record_t aps[20];
-  uint16_t n = sizeof(aps) / sizeof(aps[0]);
-  if (esp_wifi_scan_start(NULL, true) != ESP_OK) return;   // blocking, ~2 s
-  if (esp_wifi_scan_get_ap_records(&n, aps) != ESP_OK) return;
-  ESP_LOGI(TAG, "[scan] %u networks visible (2.4 GHz only):", n);
-  for (int i = 0; i < n; i++) {
-    ESP_LOGI(TAG, "[scan]   %-24s rssi=%d ch=%u auth=%d", (const char*)aps[i].ssid,
-             aps[i].rssi, aps[i].primary, (int)aps[i].authmode);
-  }
-}
-
-static void onWifiEvent(void* arg, esp_event_base_t base,
-                        int32_t id, void* data) {
-  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-    scanDump();
-    esp_wifi_connect();
-  } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    wifi_event_sta_disconnected_t* e = (wifi_event_sta_disconnected_t*)data;
-    ESP_LOGW(TAG, "wifi lost (reason=%d); rejoining '%s'", e->reason, WIFI_SSID);
-    esp_wifi_connect();                      // endless retry, esp-mqtt waits
-  } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-    ip_event_got_ip_t* e = (ip_event_got_ip_t*)data;
-    ESP_LOGI(TAG, "wifi ok, ip " IPSTR, IP2STR(&e->ip_info.ip));
-    logHeap("wifi up");
-    startMqtt();
-  }
+// WiFi is owned by wifi_provision.c (including the scan-to-list UI); this shell only reacts to the
+// interface coming up (multiple handlers on IP_EVENT are fine).
+static void onGotIp(void* arg, esp_event_base_t base, int32_t id, void* data) {
+  ip_event_got_ip_t* e = (ip_event_got_ip_t*)data;
+  ESP_LOGI(TAG, "wifi ok, ip " IPSTR, IP2STR(&e->ip_info.ip));
+  logHeap("wifi up");
+  startMqtt();
 }
 
 void nbsStart(void) {
   snprintf(s_topicFilter, sizeof(s_topicFilter),
            "/device_sensor_data/%s/%s/+/+/+", SC_ORG_ID, SC_DEVICE_EUI);
   logHeap("boot");
-
-  esp_err_t err = nvs_flash_init();
-  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    ESP_ERROR_CHECK(nvs_flash_init());
-  }
-  ESP_ERROR_CHECK(esp_netif_init());
-  ESP_ERROR_CHECK(esp_event_loop_create_default());
-  esp_netif_create_default_wifi_sta();
-
-  wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_wifi_init(&wcfg));
-  ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                             onWifiEvent, NULL));
   ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                             onWifiEvent, NULL));
-  wifi_config_t sta = { 0 };
-  strncpy((char*)sta.sta.ssid, WIFI_SSID, sizeof(sta.sta.ssid) - 1);
-  strncpy((char*)sta.sta.password, WIFI_PASS, sizeof(sta.sta.password) - 1);
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
-  ESP_ERROR_CHECK(esp_wifi_start());
-  ESP_LOGI(TAG, "wifi joining '%s'...", WIFI_SSID);
+                                             onGotIp, NULL));
 }
 
 void nbsLoop(void)      { nbcTick(nowMs()); }

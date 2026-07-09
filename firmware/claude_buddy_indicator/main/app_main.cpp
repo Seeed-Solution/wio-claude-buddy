@@ -17,6 +17,7 @@
 #include "lvgl.h"
 
 #include "net_bridge_shell.h"  // owns net_bridge_core (single-TU rule)
+#include "wifi_provision.h"    // WiFi lifecycle + scan/keyboard/NVS tab
 #include "stats.h"             // shared verbatim (declares statsOnBridgeTokens)
 #include "data.h"              // shared VERBATIM
 #include "buddy.h"             // shared VERBATIM — the ASCII pet engine
@@ -95,13 +96,17 @@ static void styleTab(lv_obj_t* tab) {
   lv_obj_clear_flag(tab, LV_OBJ_FLAG_SCROLLABLE);
 }
 
+static lv_obj_t* sTabview;
+
 static void uiInit(void) {
-  lv_obj_t* tv = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 52);
+  lv_obj_t* tv = sTabview = lv_tabview_create(lv_scr_act(), LV_DIR_TOP, 52);
   lv_obj_set_style_bg_color(tv, lv_color_hex(0x121417), 0);
   lv_obj_t* petTab  = lv_tabview_add_tab(tv, "Pet");
   lv_obj_t* useTab  = lv_tabview_add_tab(tv, "Usage");
   lv_obj_t* sessTab = lv_tabview_add_tab(tv, "Sessions");
-  styleTab(petTab); styleTab(useTab); styleTab(sessTab);
+  lv_obj_t* wifiTab = lv_tabview_add_tab(tv, "WiFi");
+  styleTab(petTab); styleTab(useTab); styleTab(sessTab); styleTab(wifiTab);
+  wpCreateTab(wifiTab);
 
   // ── Pet tab: the buddy canvas (2x engine scale, 2x zoom -> 300x380) ──
   lv_obj_t* canvas = buddyCanvasCreate(petTab);
@@ -200,12 +205,17 @@ extern "C" void app_main(void) {
   lv_port_init();
   buddyInit();
   buddySetPeek(false);              // 2x engine scale (Wio home-screen look)
+
+  wpStart();                        // WiFi: NVS profiles + boot FSM
+  trInit("Claude Indicator");       // MQTT (starts when WiFi gets an IP)
+
   lv_port_sem_take();
   uiInit();
+  if (!wpHasProfiles())             // unprovisioned: open the WiFi tab
+    lv_tabview_set_act(sTabview, 3, LV_ANIM_OFF);
   lv_port_sem_give();
-  ESP_LOGI(TAG, "display up — species '%s'", buddySpeciesName());
-
-  trInit("Claude Indicator");       // WiFi + MQTT (indicator_secrets.h)
+  ESP_LOGI(TAG, "display up — species '%s', %s", buddySpeciesName(),
+           wpHasProfiles() ? "known network(s) in NVS" : "unprovisioned");
 
   uint32_t lastReport = 0, lastUi = 0;
   while (true) {
@@ -220,6 +230,7 @@ extern "C" void app_main(void) {
     lv_port_sem_take();
     buddyTick((uint8_t)p);          // engine draws into the canvas buffer
     buddyCanvasFlush();
+    wpLoop(now);                    // WiFi FSM + WiFi-tab refresh
     if (now - lastUi >= 500) { lastUi = now; uiUpdate(st); }
     lv_port_sem_give();
 
