@@ -18,13 +18,14 @@ check() {
   fi
 }
 
-for f in data.h xfer.h b64.h stats.h prefs_compat.h; do
+for f in data.h xfer.h b64.h stats.h prefs_compat.h \
+         buddy_common.h buddy.h buddy.cpp; do
   check "$WIO/$f" "$IND/buddy_core/$f"
 done
+for f in "$WIO"/buddy_sp_*.cpp; do
+  check "$f" "$IND/buddy_core/$(basename "$f")"
+done
 check "$WIO/net_bridge_core.h" "$IND/net_bridge_core/net_bridge_core.h"
-
-# Phase 2 adds the buddy engine (buddy.h/buddy.cpp/buddy_common.h and the 18
-# buddy_sp_*.cpp species) to buddy_core — extend the list when they land.
 
 [ "$fail" = 0 ] && echo "shared files in sync"
 exit "$fail"

@@ -7,6 +7,22 @@
 #include <stdint.h>
 #include "esp_timer.h"
 
+// ── buddy render target ──
+// The shared buddy engine (buddy.cpp + 18 species, byte-identical to the
+// Wio's) draws through `spr`, a TFT_eSPI sprite. Here TFT_eSPI is a
+// minimal reimplementation of the five calls the engine uses, rendering
+// classic 6x8 GLCD glyphs into an LVGL canvas buffer (buddy_canvas.cpp).
+class TFT_eSPI {
+ public:
+  void fillRect(int x, int y, int w, int h, uint16_t color565);
+  void setTextColor(uint16_t fg565, uint16_t bg565);
+  void setCursor(int x, int y);
+  void setTextSize(uint8_t s);
+  void print(char c);
+  void print(const char* s);
+};
+extern TFT_eSPI spr;
+
 struct RTC_TimeTypeDef { uint8_t Hours, Minutes, Seconds; };
 struct RTC_DateTypeDef { uint8_t WeekDay, Month, Date; uint16_t Year; };
 
