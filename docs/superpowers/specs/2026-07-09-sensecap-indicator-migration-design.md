@@ -185,10 +185,15 @@ sensecraft-cli device data latest --eui <NEW_EUI>     # verify during bring-up
 
 Same org, same OpenStream broker and org API key; only the EUI (and its device
 key, used by the host for uplink auth) is new. The Indicator subscribes to
-`/device_sensor_data/<org>/<NEW_EUI>/<ch>/<rsvd>/<measID>`, so the Wio and the
-Indicator can run side by side, each fed by its own
-`buddy_sensecraft_bridge.py` instance with its own `sensecraft_config.json` —
-**zero host-code changes**; the new device is pure configuration.
+`/device_sensor_data/<org>/<NEW_EUI>/<ch>/<rsvd>/<measID>`.
+
+**One host bridge feeds both devices simultaneously** (user decision — no
+separate host version, no second process): `buddy_sensecraft_bridge.py` gains a
+`devices: [{eui, key}, ...]` list in `sensecraft_config.json` (env-var and
+legacy single `eui`/`key` config keep working as a one-device list) and POSTs
+the same measurement batch to every device each cycle, tracking the one-time
+`update-channel-info` declaration and failure backoff per device. The Wio and
+the Indicator run side by side off a single bridge process.
 
 Device-side credentials (org ID, org API key, EUI) live in NVS alongside the
 WiFi profiles — no compile-time `secrets.h` on this target. Initial provisioning:
@@ -267,5 +272,6 @@ the spirit of the repo's existing `wifi_probe`/`ble_probe`:
    scrub = dizzy, nap = idle timer only).
 2. RP2040 and its sensors → **permanently out of scope**; UART link not reserved.
 3. Remembered-network cap → **5 confirmed**.
-4. SenseCraft identity → **new device, provisioned via sensecraft-cli**; host
-   bridge unchanged, second config file; Wio and Indicator can run in parallel.
+4. SenseCraft identity → **new device, provisioned via sensecraft-cli**; a
+   single host bridge process uplinks to **both devices at once** (multi-device
+   `devices` list in config, backwards-compatible) — no separate host version.
