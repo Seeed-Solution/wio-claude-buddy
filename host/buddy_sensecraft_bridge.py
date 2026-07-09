@@ -61,29 +61,49 @@ SENSOR_TYPE = "1001"
 TZ_BIAS = 86400                  # keeps the tz-offset measurement non-negative
 
 
-def load_config() -> dict:
-    cfg = {}
-    if CONFIG_FILE.exists():
-        try:
-            cfg = json.loads(CONFIG_FILE.read_text())
-        except ValueError as e:
-            sys.exit(f"bad JSON in {CONFIG_FILE}: {e}")
+def normalize_config(raw: dict, env: "dict[str, str]") -> dict:
+    """Normalize file config + environment into {api_base, interval_s, devices}.
+
+    One bridge process uplinks the SAME measurements to every configured
+    device (e.g. a Wio Terminal and a SenseCAP Indicator side by side).
+    Device precedence: SENSECRAFT_DEVICE_EUI/KEY env pair > raw["devices"]
+    list > legacy raw["eui"]/raw["key"] scalars (still supported).
+    """
     out = {
-        "api_base": os.environ.get("SENSECRAFT_API_BASE",
-                                   cfg.get("api_base", DEFAULT_API_BASE)).rstrip("/"),
-        "eui": os.environ.get("SENSECRAFT_DEVICE_EUI", cfg.get("eui", "")),
-        "key": os.environ.get("SENSECRAFT_DEVICE_KEY", cfg.get("key", "")),
-        "interval_s": int(os.environ.get("BUDDY_INTERVAL_S",
-                                         cfg.get("interval_s", DEFAULT_INTERVAL_S))),
+        "api_base": env.get("SENSECRAFT_API_BASE",
+                            raw.get("api_base", DEFAULT_API_BASE)).rstrip("/"),
+        "interval_s": int(env.get("BUDDY_INTERVAL_S",
+                                  raw.get("interval_s", DEFAULT_INTERVAL_S))),
     }
-    if not out["eui"] or not out["key"]:
+    if env.get("SENSECRAFT_DEVICE_EUI") or env.get("SENSECRAFT_DEVICE_KEY"):
+        devices = [{"eui": env.get("SENSECRAFT_DEVICE_EUI", ""),
+                    "key": env.get("SENSECRAFT_DEVICE_KEY", "")}]
+    elif raw.get("devices"):
+        devices = [{"eui": d.get("eui", ""), "key": d.get("key", "")}
+                   for d in raw["devices"]]
+    else:
+        devices = [{"eui": raw.get("eui", ""), "key": raw.get("key", "")}]
+    if not devices or any(not d["eui"] or not d["key"] for d in devices):
         sys.exit(
             "missing device credentials. Provision a devkit and configure it:\n"
             "  sensecraft-cli device devkit create --sku blank_device --name claude-buddy\n"
             "  sensecraft-cli device devkit key --eui <EUI>\n"
             "then set SENSECRAFT_DEVICE_EUI/SENSECRAFT_DEVICE_KEY or copy\n"
-            "sensecraft_config.example.json to sensecraft_config.json and fill it in.")
+            "sensecraft_config.example.json to sensecraft_config.json and fill it\n"
+            'in ("devices": [{"eui": ..., "key": ...}, ...] uplinks to several\n'
+            "devices from this one process).")
+    out["devices"] = devices
     return out
+
+
+def load_config() -> dict:
+    raw = {}
+    if CONFIG_FILE.exists():
+        try:
+            raw = json.loads(CONFIG_FILE.read_text())
+        except ValueError as e:
+            sys.exit(f"bad JSON in {CONFIG_FILE}: {e}")
+    return normalize_config(raw, dict(os.environ))
 
 
 def measurements(hb: dict, snap: dict, tz_off: int) -> "dict[str, str]":
