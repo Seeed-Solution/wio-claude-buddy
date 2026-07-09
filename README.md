@@ -363,6 +363,12 @@ firmware/
     b64.h, xfer.h       base64 + folder-push (GIF) receiver
     test/test_b64.cpp   native unit test
   ble_probe/            minimal BLE write-path diagnostic sketch
+  wifi_probe/           staged WiFi+MQTT diagnostic sketch (on-screen stages)
+  claude_buddy_indicator/  SenseCAP Indicator port (ESP32-S3, ESP-IDF v5.1) — WIP
+    main/               app + WiFi/esp-mqtt shell + Arduino/platform shims
+    components/buddy_core/       byte-identical copies of the Wio's shared headers
+    components/net_bridge_core/  shared SenseCraft wire-format core
+    components/sensecap_bsp/     Seeed's BSP (git submodule)
 host/
   buddy_sensecraft_bridge.py  SenseCraft uplink bridge (default, stdlib-only)
   buddy_ble_bridge.py   the unified BLE bridge
@@ -372,6 +378,38 @@ host/
   requirements.txt      (BLE bridge only — bleak)
 characters/bufo/        sample GIF character pack
 ```
+
+---
+
+## SenseCAP Indicator port (in progress)
+
+`firmware/claude_buddy_indicator/` runs the same buddy data pipeline on a
+[SenseCAP Indicator](https://wiki.seeedstudio.com/Develop_with_SenseCAP_Indicator/)
+(ESP32-S3, 4" 480×480 touch). Phase 1 (done): the Wio's wire-format and
+parsing headers compile **verbatim** under ESP-IDF v5.1, with a WiFi +
+esp-mqtt shell subscribing to the same SenseCraft OpenStream topics, a boot
+self-test, and heap/fragmentation logging for hardware bring-up. Phase 2
+(next): LVGL pet UI and the on-device WiFi provisioning flow (scan → tap →
+on-screen keyboard → remembered networks → disconnect/forget). Design and
+plan: `docs/superpowers/specs/`, `docs/superpowers/plans/`.
+
+The Indicator is its **own SenseCraft device**: provision a second devkit
+(`sensecraft-cli device devkit create --sku blank_device --name
+claude-buddy-indicator`), then add its EUI/key to the `"devices"` list in
+`host/sensecraft_config.json` — one bridge process feeds the Wio and the
+Indicator simultaneously.
+
+```bash
+git submodule update --init
+. ~/esp-idf-v5.1/export.sh     # ESP-IDF v5.1.x only (BSP requirement)
+cd firmware/claude_buddy_indicator
+cp main/indicator_secrets_example.h main/indicator_secrets.h  # fill in
+idf.py set-target esp32s3 && idf.py -p /dev/cu.usbmodem* flash monitor
+```
+
+Expected on the monitor: `SELF-TEST OK` (wire format verified without any
+network), `[heap]` lines at boot / wifi-up / mqtt-up, then live
+`total/running/session%` lines as the host bridge uplinks.
 
 ---
 
