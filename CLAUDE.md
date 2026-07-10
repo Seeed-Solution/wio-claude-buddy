@@ -47,14 +47,48 @@ The `--library "$LCD"` override is only needed when a conflicting generic
 `TFT_eSPI` is installed; otherwise omit it (CI does). The LCD driver ships inside
 the board package.
 
+### Indicator firmware (`firmware/claude_buddy_indicator/`, ESP-IDF)
+
+SenseCAP Indicator port (ESP32-S3, 480×480 touch). Design + plan live in
+`docs/superpowers/specs/` / `docs/superpowers/plans/`. **ESP-IDF v5.1.x only**
+(the SenseCAP_Indicator_ESP32 BSP's pinned requirement; the BSP is the
+`components/sensecap_bsp` submodule).
+
+```bash
+git submodule update --init                       # BSP (once)
+. ~/esp-idf-v5.1/export.sh                        # or wherever v5.1.x lives
+cd firmware/claude_buddy_indicator
+idf.py set-target esp32s3 && idf.py build         # what CI runs
+idf.py -p /dev/cu.usbmodem* flash monitor         # device flashes over USB-C
+# Credentials: cp main/indicator_secrets_example.h main/indicator_secrets.h
+# (gitignored). The Indicator is its OWN sensecraft-cli devkit — new EUI.
+
+# Native wire-format test (no board):
+g++ -std=c++17 firmware/claude_buddy/test/test_net_bridge_core.cpp -o /tmp/t && /tmp/t
+```
+
+**Shared-file rule:** `data.h`, `xfer.h`, `b64.h`, `stats.h`, `prefs_compat.h`
+(in `components/buddy_core/`) and `net_bridge_core.h` are byte-identical
+copies of the Wio originals — `scripts/check_shared_files.sh` fails CI on
+drift; edit both copies in one commit. They compile verbatim because
+`main/shim/` supplies `Arduino.h`/`wio_platform.h`/`transport.h` via
+include-path precedence (never edit a shared header to "fix" an include).
+`net_bridge_core.h` holds static state: exactly ONE translation unit per
+program includes it (Wio: `net_bridge.cpp`; Indicator: `net_bridge_shell.c`;
+tests: `test_net_bridge_core.cpp`). Use template functions, not macro
+min/max, in shims — macros break libstdc++ under gnu++2b.
+
 ### Host bridge (`host/`)
 
 ```bash
 cd host
 # SenseCraft bridge (default path, stdlib-only, no venv needed):
 #   config: env vars or sensecraft_config.json (see sensecraft_config.example.json)
+#   a "devices" list uplinks to several devices (Wio + Indicator) from ONE
+#   process — per-device declaration + backoff; legacy eui/key still works
 python3 buddy_sensecraft_bridge.py               # POSTs measurements every 10 s
-python3 buddy_sensecraft_bridge.py --dry-run     # print one uplink body, don't send
+python3 buddy_sensecraft_bridge.py --dry-run     # print one uplink body per device
+python3 -m unittest test_sensecraft_config       # config normalization tests
 
 # BLE bridge (for -DBUDDY_BLE firmware):
 python3 -m venv .venv && . .venv/bin/activate
@@ -213,6 +247,16 @@ Linux/Windows means replacing `_oauth()`.
 - **`firmware/ble_probe/`** is a minimal BLE write-path diagnostic (NUS + an
   on-screen write counter, no FS/sprite). Flash it to confirm the radio/receive
   path on hardware when the full firmware misbehaves.
+- **"No Claude connected" while the bridge says `sent` and the device says
+  `mqtt=1`:** the platform accepted the uplink but the OpenStream broker isn't
+  delivering. Diagnose from the Mac:
+  `mosquitto_sub -h <broker> -u org-<org> -P <access-key> -t '/device_sensor_data/<org>/+/+/+/+' -v`
+  — silence or stale `timestamp` fields = platform-side. Two known modes
+  (2026-07-10, develop env): the channel declaration gets lost platform-side
+  (measurements silently dropped until re-declared — the bridge now re-sends
+  `update-channel-info` every 10 min per device), and the develop-env broker
+  backlogging deliveries by ~25 min (nothing to fix client-side; report it).
+  The device is fine: it goes live the moment real pushes arrive.
 - **Diagnosing a blank screen:** *white* (or red "sprite alloc failed") = OOM at
   `createSprite` (RAM too tight). *Dark + blinking LED* = a hard fault, usually a
   boot-time global constructor (this is how the `Seeed_FS` `SD` ctor crash

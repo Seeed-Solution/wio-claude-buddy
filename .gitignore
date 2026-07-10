@@ -12,3 +12,10 @@ caps.json
 .DS_Store
 host/sensecraft_config.json
 firmware/claude_buddy/secrets.h
+
+# ESP-IDF (Indicator port) build output
+firmware/claude_buddy_indicator/build/
+firmware/claude_buddy_indicator/sdkconfig
+firmware/claude_buddy_indicator/sdkconfig.old
+firmware/claude_buddy_indicator/main/indicator_secrets.h
+firmware/claude_buddy_indicator/.cache/

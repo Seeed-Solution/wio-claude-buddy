@@ -1,0 +1,3 @@
+[submodule "firmware/claude_buddy_indicator/components/sensecap_bsp"]
+	path = firmware/claude_buddy_indicator/components/sensecap_bsp
+	url = https://github.com/Seeed-Solution/SenseCAP_Indicator_ESP32

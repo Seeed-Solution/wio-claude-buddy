@@ -13,14 +13,21 @@ Provisioning (once, with sensecraft-cli authenticated):
 
 Config: env vars SENSECRAFT_API_BASE / SENSECRAFT_DEVICE_EUI /
 SENSECRAFT_DEVICE_KEY / BUDDY_INTERVAL_S, falling back to
-host/sensecraft_config.json (see sensecraft_config.example.json).
+host/sensecraft_config.json (see sensecraft_config.example.json). A
+"devices" list in the config file uplinks the same measurements to several
+devices (e.g. Wio Terminal + SenseCAP Indicator) from this one process;
+the legacy single "eui"/"key" form still works.
 
 Run:
     python3 buddy_sensecraft_bridge.py [--dry-run]
 
-Measurement map (channel "1"; custom IDs are silently dropped by the
-platform, so standard IDs are reused — the Wio firmware and this file must
-agree; see net_bridge.h):
+Measurement map (channel "1"; standard IDs only — the Wio firmware and this
+file must agree; see net_bridge.h). Do NOT add IDs outside this map without
+verifying against the live platform: a trial "4109" beat on 2026-07-10
+correlated with the OpenStream broker pushing nothing for either device
+(uplinks still returned code 0). The develop-env broker was also found to
+be backlogged (~25 min delivery lag) that day, so causation is unproven —
+but stick to verified IDs; unknown IDs are documented to be dropped:
     4097 total          4102 session.pct      4106 today.tokens
     4098 running        4103 session.reset_s  4108 tz_offset_sec + 86400
     4099 waiting        4104 week.pct              (biased: the wire never
@@ -54,36 +61,61 @@ CONFIG_FILE = Path(__file__).resolve().parent / "sensecraft_config.json"
 DEFAULT_API_BASE = "https://intranet-sensecap-env-expose-publicdns.seeed.cc"
 DEFAULT_INTERVAL_S = 10          # cloud uplink; device liveness window is 30 s
 CHANNEL = "1"
-# One-time channel declaration: measurements on an undeclared channel are
-# silently dropped by the platform. sensorType 1001 is arbitrary but valid.
+# Channel declaration: measurements on an undeclared channel are silently
+# dropped by the platform (uplinks still return code 0). The declaration can
+# be LOST platform-side (observed 2026-07-10 on the develop env: overnight
+# restart -> every measurement dropped until re-declared), so it is re-sent
+# every RE_DECLARE_S per device, not just once per process.
+# sensorType 1001 is arbitrary but valid.
 SENSOR_TYPE = "1001"
+RE_DECLARE_S = 600
 
 TZ_BIAS = 86400                  # keeps the tz-offset measurement non-negative
 
 
-def load_config() -> dict:
-    cfg = {}
-    if CONFIG_FILE.exists():
-        try:
-            cfg = json.loads(CONFIG_FILE.read_text())
-        except ValueError as e:
-            sys.exit(f"bad JSON in {CONFIG_FILE}: {e}")
+def normalize_config(raw: dict, env: "dict[str, str]") -> dict:
+    """Normalize file config + environment into {api_base, interval_s, devices}.
+
+    One bridge process uplinks the SAME measurements to every configured
+    device (e.g. a Wio Terminal and a SenseCAP Indicator side by side).
+    Device precedence: SENSECRAFT_DEVICE_EUI/KEY env pair > raw["devices"]
+    list > legacy raw["eui"]/raw["key"] scalars (still supported).
+    """
     out = {
-        "api_base": os.environ.get("SENSECRAFT_API_BASE",
-                                   cfg.get("api_base", DEFAULT_API_BASE)).rstrip("/"),
-        "eui": os.environ.get("SENSECRAFT_DEVICE_EUI", cfg.get("eui", "")),
-        "key": os.environ.get("SENSECRAFT_DEVICE_KEY", cfg.get("key", "")),
-        "interval_s": int(os.environ.get("BUDDY_INTERVAL_S",
-                                         cfg.get("interval_s", DEFAULT_INTERVAL_S))),
+        "api_base": env.get("SENSECRAFT_API_BASE",
+                            raw.get("api_base", DEFAULT_API_BASE)).rstrip("/"),
+        "interval_s": int(env.get("BUDDY_INTERVAL_S",
+                                  raw.get("interval_s", DEFAULT_INTERVAL_S))),
     }
-    if not out["eui"] or not out["key"]:
+    if env.get("SENSECRAFT_DEVICE_EUI") or env.get("SENSECRAFT_DEVICE_KEY"):
+        devices = [{"eui": env.get("SENSECRAFT_DEVICE_EUI", ""),
+                    "key": env.get("SENSECRAFT_DEVICE_KEY", "")}]
+    elif raw.get("devices"):
+        devices = [{"eui": d.get("eui", ""), "key": d.get("key", "")}
+                   for d in raw["devices"]]
+    else:
+        devices = [{"eui": raw.get("eui", ""), "key": raw.get("key", "")}]
+    if not devices or any(not d["eui"] or not d["key"] for d in devices):
         sys.exit(
             "missing device credentials. Provision a devkit and configure it:\n"
             "  sensecraft-cli device devkit create --sku blank_device --name claude-buddy\n"
             "  sensecraft-cli device devkit key --eui <EUI>\n"
             "then set SENSECRAFT_DEVICE_EUI/SENSECRAFT_DEVICE_KEY or copy\n"
-            "sensecraft_config.example.json to sensecraft_config.json and fill it in.")
+            "sensecraft_config.example.json to sensecraft_config.json and fill it\n"
+            'in ("devices": [{"eui": ..., "key": ...}, ...] uplinks to several\n'
+            "devices from this one process).")
+    out["devices"] = devices
     return out
+
+
+def load_config() -> dict:
+    raw = {}
+    if CONFIG_FILE.exists():
+        try:
+            raw = json.loads(CONFIG_FILE.read_text())
+        except ValueError as e:
+            sys.exit(f"bad JSON in {CONFIG_FILE}: {e}")
+    return normalize_config(raw, dict(os.environ))
 
 
 def measurements(hb: dict, snap: dict, tz_off: int) -> "dict[str, str]":
@@ -103,7 +135,7 @@ def measurements(hb: dict, snap: dict, tz_off: int) -> "dict[str, str]":
     }
 
 
-def uplink_body(cfg: dict, meas: "dict[str, str]", declare_channel: bool) -> dict:
+def uplink_body(dev: dict, meas: "dict[str, str]", declare_channel: bool) -> dict:
     ms = str(int(time.time() * 1000))
     events = [{
         "name": "measure-sensor",
@@ -119,16 +151,16 @@ def uplink_body(cfg: dict, meas: "dict[str, str]", declare_channel: bool) -> dic
         "requestId": str(uuid.uuid4()),
         "timestamp": ms,
         "intent": "event",
-        "deviceEui": cfg["eui"],
-        "deviceKey": cfg["key"],
+        "deviceEui": dev["eui"],
+        "deviceKey": dev["key"],
         "events": events,
     }
 
 
-def post_uplink(cfg: dict, body: dict) -> None:
-    auth = base64.b64encode(f"{cfg['eui']}:{cfg['key']}".encode()).decode()
+def post_uplink(api_base: str, dev: dict, body: dict) -> None:
+    auth = base64.b64encode(f"{dev['eui']}:{dev['key']}".encode()).decode()
     req = urllib.request.Request(
-        cfg["api_base"] + "/deviceapi/kit/message_uplink",
+        api_base + "/deviceapi/kit/message_uplink",
         data=json.dumps(body, separators=(",", ":")).encode("utf-8"),
         headers={"Authorization": f"Device {auth}",
                  "Content-Type": "application/json"},
@@ -151,9 +183,12 @@ def run(dry_run: bool) -> None:
     events: list = []
     probed = None
     last_probe = 0.0
-    declared = False                 # send update-channel-info on first uplink
-    backoff = 0                      # doubling 5..60 s after failures
-    print(f"uplinking to {cfg['api_base']} as {cfg['eui']} every {cfg['interval_s']}s")
+    for dev in cfg["devices"]:       # per-device runtime state
+        dev.update(declared_at=0.0,  # last update-channel-info; re-sent every
+                   backoff=0,        # RE_DECLARE_S in case the platform loses
+                   next_try=0.0)     # it. backoff doubles 5..60 s on failure.
+    euis = ", ".join(d["eui"] for d in cfg["devices"])
+    print(f"uplinking to {cfg['api_base']} as [{euis}] every {cfg['interval_s']}s")
     while True:
         now = time.time()
         events.extend(scanner.scan())
@@ -176,21 +211,35 @@ def run(dry_run: bool) -> None:
                 snap["week"]["reset_label"] = w.get("label", ""); snap["week"]["src"] = "exact"
 
         hb = heartbeat(events, now)
-        body = uplink_body(cfg, measurements(hb, snap, tz_off), not declared)
+        meas = measurements(hb, snap, tz_off)
+        sent = []
+        for dev in cfg["devices"]:
+            if now < dev["next_try"]:          # this device is backing off
+                continue
+            declare = now - dev["declared_at"] >= RE_DECLARE_S
+            body = uplink_body(dev, meas, declare)
+            if dry_run:
+                print(json.dumps(body, indent=2))
+                continue
+            try:
+                post_uplink(cfg["api_base"], dev, body)
+                if declare:
+                    dev["declared_at"] = now
+                dev["backoff"] = 0
+                sent.append(dev["eui"])
+            except Exception as e:
+                dev["backoff"] = min(60, dev["backoff"] * 2) if dev["backoff"] else 5
+                dev["next_try"] = now + dev["backoff"]
+                print(f"uplink to {dev['eui']} failed ({e}); "
+                      f"retrying in {dev['backoff']}s")
         if dry_run:
-            print(json.dumps(body, indent=2))
             return
-        try:
-            post_uplink(cfg, body)
-            declared = True
-            backoff = 0
+        if sent:
             src = snap["session"].get("src", "est")
-            print(f"sent ({src}): session {snap['session']['pct']}%  "
+            print(f"sent to [{', '.join(sent)}] ({src}): "
+                  f"session {snap['session']['pct']}%  "
                   f"week {snap['week']['pct']}%  running {hb['running']}")
-        except Exception as e:
-            backoff = min(60, backoff * 2) if backoff else 5
-            print(f"uplink failed ({e}); retrying in {backoff}s")
-        time.sleep(backoff if backoff else cfg["interval_s"])
+        time.sleep(cfg["interval_s"])
 
 
 if __name__ == "__main__":

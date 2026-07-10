@@ -1,6 +1,14 @@
 {
   "api_base": "https://intranet-sensecap-env-expose-publicdns.seeed.cc",
-  "eui": "<devkit EUI from: sensecraft-cli device devkit create --sku blank_device>",
-  "key": "<device_key from: sensecraft-cli device devkit key --eui <EUI>>",
+  "devices": [
+    {
+      "eui": "<Wio devkit EUI from: sensecraft-cli device devkit create --sku blank_device>",
+      "key": "<device_key from: sensecraft-cli device devkit key --eui <EUI>>"
+    },
+    {
+      "eui": "<Indicator devkit EUI — one process uplinks to every listed device; delete this entry if you only have one>",
+      "key": "<its device_key>"
+    }
+  ],
   "interval_s": 10
 }
