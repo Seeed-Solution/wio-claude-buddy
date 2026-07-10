@@ -21,9 +21,13 @@ the legacy single "eui"/"key" form still works.
 Run:
     python3 buddy_sensecraft_bridge.py [--dry-run]
 
-Measurement map (channel "1"; custom IDs are silently dropped by the
-platform, so standard IDs are reused — the Wio firmware and this file must
-agree; see net_bridge.h):
+Measurement map (channel "1"; standard IDs only — the Wio firmware and this
+file must agree; see net_bridge.h). Do NOT add IDs outside this map without
+verifying against the live platform: a trial "4109" beat on 2026-07-10
+correlated with the OpenStream broker pushing nothing for either device
+(uplinks still returned code 0). The develop-env broker was also found to
+be backlogged (~25 min delivery lag) that day, so causation is unproven —
+but stick to verified IDs; unknown IDs are documented to be dropped:
     4097 total          4102 session.pct      4106 today.tokens
     4098 running        4103 session.reset_s  4108 tz_offset_sec + 86400
     4099 waiting        4104 week.pct              (biased: the wire never
@@ -57,9 +61,14 @@ CONFIG_FILE = Path(__file__).resolve().parent / "sensecraft_config.json"
 DEFAULT_API_BASE = "https://intranet-sensecap-env-expose-publicdns.seeed.cc"
 DEFAULT_INTERVAL_S = 10          # cloud uplink; device liveness window is 30 s
 CHANNEL = "1"
-# One-time channel declaration: measurements on an undeclared channel are
-# silently dropped by the platform. sensorType 1001 is arbitrary but valid.
+# Channel declaration: measurements on an undeclared channel are silently
+# dropped by the platform (uplinks still return code 0). The declaration can
+# be LOST platform-side (observed 2026-07-10 on the develop env: overnight
+# restart -> every measurement dropped until re-declared), so it is re-sent
+# every RE_DECLARE_S per device, not just once per process.
+# sensorType 1001 is arbitrary but valid.
 SENSOR_TYPE = "1001"
+RE_DECLARE_S = 600
 
 TZ_BIAS = 86400                  # keeps the tz-offset measurement non-negative
 
@@ -175,9 +184,9 @@ def run(dry_run: bool) -> None:
     probed = None
     last_probe = 0.0
     for dev in cfg["devices"]:       # per-device runtime state
-        dev.update(declared=False,   # send update-channel-info on first uplink
-                   backoff=0,        # doubling 5..60 s after failures
-                   next_try=0.0)
+        dev.update(declared_at=0.0,  # last update-channel-info; re-sent every
+                   backoff=0,        # RE_DECLARE_S in case the platform loses
+                   next_try=0.0)     # it. backoff doubles 5..60 s on failure.
     euis = ", ".join(d["eui"] for d in cfg["devices"])
     print(f"uplinking to {cfg['api_base']} as [{euis}] every {cfg['interval_s']}s")
     while True:
@@ -207,13 +216,15 @@ def run(dry_run: bool) -> None:
         for dev in cfg["devices"]:
             if now < dev["next_try"]:          # this device is backing off
                 continue
-            body = uplink_body(dev, meas, not dev["declared"])
+            declare = now - dev["declared_at"] >= RE_DECLARE_S
+            body = uplink_body(dev, meas, declare)
             if dry_run:
                 print(json.dumps(body, indent=2))
                 continue
             try:
                 post_uplink(cfg["api_base"], dev, body)
-                dev["declared"] = True
+                if declare:
+                    dev["declared_at"] = now
                 dev["backoff"] = 0
                 sent.append(dev["eui"])
             except Exception as e:

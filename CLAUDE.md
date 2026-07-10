@@ -247,6 +247,16 @@ Linux/Windows means replacing `_oauth()`.
 - **`firmware/ble_probe/`** is a minimal BLE write-path diagnostic (NUS + an
   on-screen write counter, no FS/sprite). Flash it to confirm the radio/receive
   path on hardware when the full firmware misbehaves.
+- **"No Claude connected" while the bridge says `sent` and the device says
+  `mqtt=1`:** the platform accepted the uplink but the OpenStream broker isn't
+  delivering. Diagnose from the Mac:
+  `mosquitto_sub -h <broker> -u org-<org> -P <access-key> -t '/device_sensor_data/<org>/+/+/+/+' -v`
+  — silence or stale `timestamp` fields = platform-side. Two known modes
+  (2026-07-10, develop env): the channel declaration gets lost platform-side
+  (measurements silently dropped until re-declared — the bridge now re-sends
+  `update-channel-info` every 10 min per device), and the develop-env broker
+  backlogging deliveries by ~25 min (nothing to fix client-side; report it).
+  The device is fine: it goes live the moment real pushes arrive.
 - **Diagnosing a blank screen:** *white* (or red "sprite alloc failed") = OOM at
   `createSprite` (RAM too tight). *Dark + blinking LED* = a hard fault, usually a
   boot-time global constructor (this is how the `Seeed_FS` `SD` ctor crash
